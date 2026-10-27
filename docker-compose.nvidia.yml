@@ -1,0 +1,70 @@
+# ─── Laya Decision Model — NVIDIA GPU mode ───────────────────────────────────
+# Usage:
+#   docker compose -f docker-compose.nvidia.yml up -d --build
+#   docker compose -f docker-compose.nvidia.yml logs -f laya
+#
+# Host requirements:
+#   - NVIDIA driver + nvidia-container-toolkit
+#   - Docker runtime configured for NVIDIA:
+#       sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  laya:
+    image: laya-nvidia:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.nvidia
+    container_name: laya
+
+    # ── NVIDIA GPU passthrough ────────────────────────────────────────────────
+    # Requires nvidia-container-toolkit on the host.
+    # count: all  — expose every GPU; set to 1 to use a single card.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # ── Ports ─────────────────────────────────────────────────────────────────
+    ports:
+      - "7000:8000"
+
+    # ── Shared memory ─────────────────────────────────────────────────────────
+    # NVIDIA multi-process service and large model tensors benefit from
+    # a generous /dev/shm allocation.
+    shm_size: '8gb'
+    ipc: host
+
+    # ── Volumes ───────────────────────────────────────────────────────────────
+    volumes:
+      - laya-models:/models
+
+    # ── Environment ───────────────────────────────────────────────────────────
+    environment:
+      LAYA_API_KEY: "${LAYA_API_KEY:-}"
+      LAYA_MODEL: "${LAYA_MODEL:-laya-multilingual}"
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-2}"
+      HF_HOME: /models
+
+      # ── NVIDIA runtime settings ──────────────────────────────────────────
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+      PYTHONUNBUFFERED: "1"
+
+    # ── Health check ──────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+    restart: unless-stopped
+
+volumes:
+  laya-models:
+    driver: local
