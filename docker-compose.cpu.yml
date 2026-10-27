@@ -1,0 +1,65 @@
+# ─── Laya Decision Model — CPU-only mode ────────────────────────────────────
+# Use this file when GPU mode is unavailable (e.g. no AMD GPU, Docker APU
+# memory fault, or CI/staging environments without ROCm).
+#
+# Usage:
+#   docker compose -f docker-compose.cpu.yml up -d --build
+#   docker compose -f docker-compose.cpu.yml logs -f laya
+#
+# No GPU devices, groups, capabilities, shm, or ulimits are needed.
+# laya-multilingual (322 M params) runs well on CPU for low-to-medium traffic.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  laya:
+    image: laya-rocm:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: laya
+
+    # ── Ports ────────────────────────────────────────────────────────────────
+    ports:
+      - "7000:8000"
+
+    # ── Volumes ──────────────────────────────────────────────────────────────
+    volumes:
+      - laya-models:/models
+
+    # ── Environment ──────────────────────────────────────────────────────────
+    environment:
+      # ── Required ─────────────────────────────────────────────────────────
+      LAYA_API_KEY: "${LAYA_API_KEY:-}"
+
+      # ── Model selection ───────────────────────────────────────────────────
+      LAYA_MODEL: "${LAYA_MODEL:-laya-multilingual}"
+
+      # ── Workers ──────────────────────────────────────────────────────────
+      # CPU inference: 1 worker per 2 CPU cores is a reasonable starting point.
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-2}"
+
+      # ── HuggingFace cache ────────────────────────────────────────────────
+      HF_HOME: /models
+
+      # ── CPU-only mode ─────────────────────────────────────────────────────
+      # Hide ROCm devices so PyTorch falls back to CPU inference.
+      CUDA_VISIBLE_DEVICES: ""
+      HIP_VISIBLE_DEVICES: ""
+
+      # ── Logging ──────────────────────────────────────────────────────────
+      PYTHONUNBUFFERED: "1"
+
+    # ── Health check ─────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+    # ── Restart policy ────────────────────────────────────────────────────────
+    restart: unless-stopped
+
+volumes:
+  laya-models:
+    driver: local

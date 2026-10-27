@@ -1,0 +1,112 @@
+version: "3.9"
+
+# ─── Laya Decision Model — ROCm + REST + MCP ────────────────────────────────
+# Usage:
+#   cp .env.example .env          # edit LAYA_API_KEY at minimum
+#   docker compose up -d --build
+#   docker compose logs -f laya
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  laya:
+    image: laya-rocm:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: laya
+
+    # ── ROCm device passthrough ──────────────────────────────────────────────
+    # /dev/kfd   : AMD kernel fusion driver (required for GPU compute)
+    # /dev/dri   : DRM render nodes (required for GPU access)
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video    # grants access to /dev/dri/renderD*
+      - render   # GID auto-resolved at startup by entrypoint.sh from /dev/dri device
+
+    # Required by ROCm's internal IPC + profiling
+    ipc: host
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN   # ROCm on APU needs this to create GPU memory mappings;
+                    # root in a container lacks capabilities root on host has
+    security_opt:
+      - seccomp=unconfined
+
+    # ── Ports ────────────────────────────────────────────────────────────────
+    ports:
+      - "7000:8000"
+
+    # ── Shared memory ─────────────────────────────────────────────────────────
+    # ROCm on APU uses /dev/shm for GPU↔CPU memory coordination.
+    # Default Docker shm (64 MB) is far too small.
+    shm_size: '8gb'
+
+    # ── Volumes ──────────────────────────────────────────────────────────────
+    # laya-models: persists HuggingFace weight downloads across container
+    #              restarts and image rebuilds (~700 MB multilingual, ~850 MB English)
+    volumes:
+      - laya-models:/models
+
+    # ── Environment ──────────────────────────────────────────────────────────
+    environment:
+      # ── Required ─────────────────────────────────────────────────────────
+      # Set a strong secret here or in the .env file.
+      # If left empty, a random key is generated at startup and printed to logs.
+      LAYA_API_KEY: "${LAYA_API_KEY:-}"
+
+      # ── Model selection ───────────────────────────────────────────────────
+      # laya-multilingual  (default) — 322 M params, 100+ languages, 1024-token context
+      # laya-english                 — 421 M params, English only, 512-token context
+      # laya-typed-decisions         — 421 M params, English, optimised for workflows
+      LAYA_MODEL: "${LAYA_MODEL:-laya-multilingual}"
+
+      # ── Workers ──────────────────────────────────────────────────────────
+      # 2 workers is a good default for a GPU node; raise to 4 on high-core machines.
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-2}"
+
+      # ── HuggingFace cache ────────────────────────────────────────────────
+      HF_HOME: /models
+
+      # ── ROCm / APU GPU settings ───────────────────────────────────────────
+      # gfx1150 (Radeon 890M) — confirmed working value is 11.5.1.
+      # 11.0.0 / 11.0.3 / 11.5.0 all caused "Page not present" page faults.
+      HSA_OVERRIDE_GFX_VERSION: "11.5.1"
+      HSA_ENABLE_SDMA: "0"
+
+      # ── Logging ──────────────────────────────────────────────────────────
+      PYTHONUNBUFFERED: "1"
+
+    # ── Health check ─────────────────────────────────────────────────────────
+    # Docker marks the container healthy once /health returns 200.
+    # No auth token required on that endpoint.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s   # extra time for weight download on first run
+
+    # ── Memory locking — required for ROCm GPU memory pinning ────────────────
+    # Without this the container hits the default locked-memory ceiling and
+    # ROCm fails to pin GPU pages, causing "Page not present" memory faults.
+    ulimits:
+      memlock:
+        soft: -1   # unlimited
+        hard: -1
+
+    # ── Restart policy ────────────────────────────────────────────────────────
+    restart: unless-stopped
+
+    # ── Resource limits (optional) ────────────────────────────────────────────
+    # Uncomment if you want to cap CPU / memory usage.
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "4"
+    #       memory: 8G
+
+volumes:
+  laya-models:
+    driver: local

@@ -1,0 +1,24 @@
+# NOTE: laya is installed separately in the Dockerfile with --no-deps
+# so that pip cannot replace the ROCm-built torch with a CPU/CUDA wheel.
+# Do NOT add laya here.
+
+# Laya runtime deps
+transformers
+tokenizers
+safetensors
+huggingface_hub
+numpy
+
+# Serving stack
+fastapi
+uvicorn[standard]
+
+# MCP (Model Context Protocol) — Streamable HTTP transport
+# mcp 2.x: FastMCP renamed to MCPServer; transport params moved to method calls.
+# app.py has been migrated — see migration guide:
+# https://py.sdk.modelcontextprotocol.io/v2/migration/
+mcp[cli]>=2.0
+
+# mcp 2.x raises the pydantic floor to >=2.12
+# Also requires: opentelemetry-api>=1.28.0, httpx2>=2.5.0 (pulled in by mcp)
+pydantic>=2.12
